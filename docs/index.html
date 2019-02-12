@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"><!-- ✅ あ keeps UTF-8 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cspline</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.7.3/Chart.bundle.min.js"></script>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<style>
+:root {
+    --background-color: rgba(255, 255, 255, 1);
+    --history-background-color: rgba(240, 240, 240, 1);
+    --primary-color: rgba(0, 64, 32, 1);
+    --spacing: 8px;
+}
+html, body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--background-color);
+}
+html {
+    overflow: hidden;
+}
+body {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+}
+* {
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.6);
+}
+#header-placer {
+    height: 32px;
+}
+#header {
+    position: fixed;
+
+    width: calc(100% - var(--spacing) * 2);
+    height: 32px;
+    padding-left: var(--spacing);
+    padding-right: var(--spacing);
+
+    display: flex;
+    align-items: center;
+
+    background-color: var(--primary-color);
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+}
+#header * {
+    color: rgba(255, 255, 255, 1);
+}
+#header .title {
+    font-size: 16px;
+    font-weight: bold;
+}
+#header i.material-icons {
+    font-size: 24px;
+    user-select: none;
+}
+#header i.button {
+    cursor: pointer;
+}
+#header .space {
+    flex-grow: 1;
+}
+#output-container {
+    margin: var(--spacing);
+    margin-bottom: 0;
+    width: calc(100% - var(--spacing) * 2);
+}
+#output-container:empty {
+    margin: 0;
+}
+#output-container * {
+    margin-top: var(--spacing);
+}
+#input-container {
+    margin: var(--spacing);
+    width: calc(100% - var(--spacing) * 2);
+}
+#points-input-text {
+    width: 100%;
+    height: 25vh;
+
+    box-sizing: border-box;
+    border: solid 1px rgba(0, 0, 0, 0.18);
+    resize: none;
+    outline: none;
+    color: rgba(0, 0, 0, 0.8);
+}
+.input-history {
+    margin-top: var(--spacing);
+}
+.input-history pre {
+    padding: 0;
+    padding-left: var(--spacing);
+    margin: 0;
+    background-color: var(--history-background-color);
+    border-left: 4px solid black;
+}
+a {
+    color: rgba(0, 0, 0, 0.4);
+    font-size: 12px;
+}
+</style>
+</head>
+<body>
+    <template id="input-history-view">
+        <div class="input-history">
+            <pre>{points}</pre>
+        </div>
+    </template>
+    <template id="output-message-view">
+        <div class="output-message">{message}</div>
+    </template>
+    <template id="output-graph-view">
+        <div class="output-graph">
+            <canvas></canvas>
+        </div>
+    </template>
+    <div id="header">
+        <p><span class="title">CUBIC SPLINE</span> v1.0.0</p>
+        <div class="space"></div>
+        <i id="clear-button" class="material-icons button">clear</i>
+    </div>
+    <div id="header-placer"></div>
+    <div id="output-container"></div>
+    <div id="input-container">
+        input points:
+        <textarea id="points-input-text"></textarea>
+        <button id="cspline-button">cspline (ctrl+Enter)</button>
+        <br>
+        <br>
+        <a href="https://github.com/takayoshiotake/cspline">https://github.com/takayoshiotake/cspline</a>
+    </div>
+<script>
+let app = {}
+app.q1 = query => { return document.querySelector(query) }
+app.qn = query => { return document.querySelectorAll(query) }
+app.outputMessage = msg => {
+    let message = document.importNode(app.q1('#output-message-view').content, true)
+    message.querySelector('div').textContent = msg
+    app.q1('#output-container').appendChild(message)
+    document.body.scrollTop = document.body.scrollHeight
+}
+app.ouputCSplineGraph = points => {
+    let inputHistory = document.importNode(app.q1('#input-history-view').content, true)
+    inputHistory.querySelector('pre').textContent = points
+    app.q1('#output-container').appendChild(inputHistory)
+
+    try {
+        points = points.split(/\r?\n/).map(line => {
+            var values = line.split(/,/)
+            if (values.length != 2) {
+                throw 'Illegal input'
+            }
+            values = values.map(x => {
+                let value = Number(x)
+                if (isNaN(value)) {
+                    throw `Illegal number: ${x}`
+                }
+                return value
+            })
+            return { x: values[0], y: values[1] }
+        })
+        let curves = app.csplineForPoints(points)
+
+        let range = points[points.length - 1].x - points[0].x
+        let spline = []
+        for (let i = 0; i < 100; ++i) {
+            spline.push({x: points[0].x + i * range / 100})
+        }
+        spline.push({x: points[points.length - 1].x})
+        spline = spline.map(p => { return { x: p.x, y: curves.y(p.x) } })
+
+        let graph = document.importNode(app.q1('#output-graph-view').content, true)
+        let ctx = graph.querySelector('canvas')
+        ctx.width = 320
+        ctx.height = 240
+        let chart = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        data: points,
+                        label: 'input',
+                        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                        fill: false,
+                        pointBackgroundColor: 'transparent',
+                        pointBorderColor: 'rgba(0, 0, 0, 0.6)',
+                        pointBorderWidth: 1,
+                        pointRadius: 3,
+                        pointStyle: 'circle',
+                        showLine: false,
+                        animation: true
+                    },
+                    {
+                        data: spline,
+                        label: 'cspline',
+                        backgroundColor: 'rgba(0, 64, 32, 1)',
+                        borderColor: 'rgba(0, 64, 32, 1)',
+                        borderWidth: 2,
+                        fill: false,
+                        lineTension: 0,
+                        pointBorderWidth: 0,
+                        pointRadius: 0,
+                        showLine: true,
+                        animation: true
+                    }
+                ]
+            },
+            options:{
+                scales: {
+                },
+                responsive: false,
+                maintainAspectRatio: true
+            }
+        })
+        app.q1('#output-container').appendChild(graph)
+    } catch (e) {
+        app.outputMessage(`Error: ${e}`)
+    }
+    document.body.scrollTop = document.body.scrollHeight
+}
+app.csplineForPoints = (points) => {
+    let S = []
+
+    if (points.length < 2) {
+        throw 'Illegal input'
+    }
+    for (let i = 0; i < points.length - 1; ++i) {
+        if (points[i].x >= points[i+1].x) {
+            throw 'Illegal x order'
+        }
+    }
+
+    let N = points.length - 1 // N + 1 points => N curves
+    // Prepare curves
+    for (let i = 0; i < N; ++i) {
+        S.push({
+            a: NaN,
+            b: NaN,
+            c: NaN,
+            d: NaN,
+            xs: points[i].x,
+            xe: points[i+1].x
+        })
+    }
+    // d_i
+    for (let i = 0; i < N; ++i) {
+        S[i].d = points[i].y
+    }
+    // b_i
+    {
+        let X = []
+        {
+            for (let r = 0; r < N-1; ++r) {
+                for (let c = 0; c < N-1; ++c) {
+                    X[r * (N-1) + c] = 0
+                }
+            }
+            // 0
+            let xd0 = points[1].x - points[0].x
+            let xd1 = points[2].x - points[1].x
+            X[0 * (N-1) + 0] = 2 * (xd0 + xd1)
+            X[0 * (N-1) + 1] = xd1
+            // 1, 2, ... n-3
+            for (let r = 1; r < N-2; ++r) {
+                let c = r-1
+                X[r * (N-1) + c+0] = points[r+1].x - points[r].x
+                X[r * (N-1) + c+1] = 2 * ((points[r+1].x - points[r].x) + (points[r+2].x - points[r+1].x))
+                X[r * (N-1) + c+2] = points[r+2].x - points[r+1].x
+            }
+            // n-2
+            let xdn_2 = points[N-1].x - points[N-2].x
+            let xdn_1 = points[N].x - points[N-1].x
+            X[(N-2) * (N-1) + N-3] = xdn_2
+            X[(N-2) * (N-1) + N-2] = 2 * (xdn_2 + xdn_1)
+        }
+        let X_inv = []
+        {
+            for (let r = 0; r < N-1; ++r) {
+                for (let c = 0; c < N-1; ++c) {
+                    X_inv[r * (N-1) + c] = r == c ? 1 : 0
+                }
+            }
+            // row reduction: bottom-left (destructs X)
+            for (let r = 1; r < N-1; ++r) {
+                let scale = X[r * (N-1) + r-1] / X[(r-1) * (N-1) + r-1]
+                for (let c = 0; c < N-1; ++c) {
+                    X[r * (N-1) + c] -= scale * X[(r-1) * (N-1) + c]
+                    X_inv[r * (N-1) + c] -= scale * X_inv[(r-1) * (N-1) + c]
+                }
+            }
+            // row reduction: top-right (destructs X)
+            for (let r_inv = 1; r_inv < N-1; ++r_inv) {
+                let r = N-1 - r_inv
+                let scale = X[(r-1) * (N-1) + r] / X[r * (N-1) + r];
+                for (let c = 0; c < N-1; ++c) {
+                    X[(r-1) * (N-1) + c] -= scale * X[r * (N-1) + c]
+                    X_inv[(r-1) * (N-1) + c] -= scale * X_inv[r * (N-1) + c]
+                }
+            }
+            // row reduction: normalize
+            for (let r = 0; r < N-1; ++r) {
+                let scale = 1 / X[r * (N-1) + r]
+                for (let c = 0; c < N-1; ++c) {
+                    X[r * (N-1) + c] *= scale
+                    X_inv[r * (N-1) + c] *= scale
+                }
+            }
+        }
+        let Z = []
+        for (let i = 0; i < N-1; ++i) {
+            let ydi1 = points[i+2].y - points[i+1].y
+            let xdi1 = points[i+2].x - points[i+1].x
+            let ydi = points[i+1].y - points[i].y
+            let xdi = points[i+1].x - points[i].x
+            Z[i] = 3 * (ydi1 / xdi1 - ydi / xdi)
+        }
+        // b_i
+        {
+            S[0].b = 0;
+            for (let i = 1; i < N; ++i) {
+                S[i].b = 0
+                for (let j = 0; j < N-1; ++j) {
+                    S[i].b += X_inv[(i-1) * (N-1) + j] * Z[j]
+                }
+            }
+        }
+    }
+    // a_i
+    {
+        for (let i = 0; i < N-1; ++i) {
+            let xdi = points[i+1].x - points[i].x
+            S[i].a = (S[i+1].b - S[i].b) / (3 * xdi)
+        }
+        const bn = 0;
+        let xdn_1 = points[N].x - points[N-1].x
+        S[N-1].a = (bn - S[N-1].b) / (3 * xdn_1)
+    }
+    // c_i
+    for (let i = 0; i < N; ++i) {
+        let dy = points[i+1].y - points[i].y
+        let dx = points[i+1].x - points[i].x
+
+        S[i].c = dy / dx - S[i].a * dx * dx - S[i].b * dx
+    }
+
+    S.y = x => {
+        for (let curve of S) {
+            if (x >= curve.xs && x <= curve.xe) {
+                let nx = x - curve.xs
+                return curve.a * nx * nx * nx + curve.b * nx * nx + curve.c * nx + curve.d
+            }
+        }
+        return NaN
+    }
+
+    return S
+}
+
+let viewModel = {
+    _callbacks: {},
+    subscribe(name, callback) {
+        if (!(name in this._callbacks)) {
+            this._callbacks[name] = []
+        }
+        this._callbacks[name].push(callback)
+    },
+    _publish(name, val) {
+        if (name in this._callbacks) {
+            for (let callback of this._callbacks[name]) {
+                callback(val)
+            }
+        }
+    },
+
+    _input: '',
+    get input() { return this._input },
+    set input(val) {
+        this._input = val
+        this._publish('input', this._input)
+    },
+}
+
+document.addEventListener('keydown', event => {
+    if (event.ctrlKey && event.key.toLowerCase() == 'enter') {
+        app.ouputCSplineGraph(viewModel.input)
+    }
+})
+
+let _bindings = {
+    '#clear-button': it => {
+        it.onclick = e => {
+            app.q1('#output-container').textContent = ''
+        }
+    },
+    '#cspline-button': it => {
+        it.onclick = e => {
+            app.ouputCSplineGraph(viewModel.input)
+        }
+    },
+    '#points-input-text': it => {
+        viewModel.subscribe('input', val => {
+            it.value = val
+        })
+        it.addEventListener('input', e => {
+            viewModel.input = it.value
+        })
+    }
+}
+Object.keys(_bindings).forEach(key => {
+    _bindings[key](app.q1(key))
+})
+
+viewModel.input = String.raw`0,0
+10,20
+50,80
+100,100`
+</script>
+</body>
+</html>
